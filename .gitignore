@@ -1,0 +1,20 @@
+# секреты — НИКОГДА не коммитим
+.env
+*.pem
+*.key
+config.json
+
+# python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# редакторы
+.vscode/
+.idea/
+.claude/
