@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 import xml.etree.ElementTree as ET
 from dotenv import load_dotenv
@@ -7,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("TOKEN")
-CHAT_ID = 747588380  # не секрет, просто твой личный id в Telegram
+CHAT_ID = os.getenv("CHAT_ID")  # получатель теперь настраивается через .env, а не зашит в коде
 
 RSS_URL = "https://openai.com/news/rss.xml"
 
@@ -26,8 +27,14 @@ message_text = f"{title}\n{link}"
 
 send_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
-# POST-запрос к Telegram: просим отправить текст message_text в чат CHAT_ID
-result = requests.post(send_url, data={"chat_id": CHAT_ID, "text": message_text})
+data = {
+    "chat_id": CHAT_ID,
+    "text": message_text,
+    # отключает разворачивание карточки-превью со ссылкой (картинка/заголовок сайта)
+    "link_preview_options": json.dumps({"is_disabled": True})
+}
+
+result = requests.post(send_url, data=data)
 
 if result.status_code == 200:
     print("Отправлено:", message_text)
