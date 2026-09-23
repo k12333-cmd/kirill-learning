@@ -114,22 +114,25 @@ def test_collect_news_skips_already_sent_links(monkeypatch):
     day = datetime.now(timezone.utc) - timedelta(days=1)
 
     def fake_fetch_source(url):
-        return [
-            _make_item("Уже отправленная новость", "https://a.com/old?utm_source=x", day),
-            _make_item("Новая новость", "https://a.com/new", day),
-        ]
+        if "openai" in url:
+            return [
+                _make_item("Уже отправленная новость", "https://a.com/old?utm_source=x", day),
+                _make_item("Новая новость", "https://a.com/new", day),
+            ]
+        return []
 
     monkeypatch.setattr(bot, "fetch_source", fake_fetch_source)
     monkeypatch.setattr(bot, "translate_title", lambda title: title)
 
     sent_links = {"https://a.com/old"}
 
-    dated_news, undated_news, failed_sources = bot.collect_news(sent_links)
+    dated_news, undated_news, failed_sources, already_sent_count = bot.collect_news(sent_links)
 
     links = [item["clean_link"] for item in dated_news]
     assert "https://a.com/old" not in links
     assert "https://a.com/new" in links
     assert failed_sources == []
+    assert already_sent_count == 1
 
 
 def test_collect_news_reports_failed_source(monkeypatch):
@@ -140,8 +143,21 @@ def test_collect_news_reports_failed_source(monkeypatch):
 
     monkeypatch.setattr(bot, "fetch_source", fake_fetch_source)
 
-    dated_news, undated_news, failed_sources = bot.collect_news(set())
+    dated_news, undated_news, failed_sources, already_sent_count = bot.collect_news(set())
 
     assert "OpenAI" in failed_sources
     assert dated_news == []
     assert undated_news == []
+    assert already_sent_count == 0
+
+
+def test_empty_digest_message_distinguishes_three_states():
+    assert bot.empty_digest_message([], 0) == "На этой неделе новостей не было."
+
+    assert "уже было" in bot.empty_digest_message([], 3)
+
+    failed_text = bot.empty_digest_message(["OpenAI"], 0)
+    assert "не ответила" in failed_text
+
+    # если источники упали, это важнее, чем "уже видели" — приоритет за поломкой
+    assert bot.empty_digest_message(["OpenAI"], 5) == failed_text

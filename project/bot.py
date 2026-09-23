@@ -5,8 +5,11 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit, urlunsplit
+import time
 from dotenv import load_dotenv
 from deep_translator import GoogleTranslator
+from deep_translator.exceptions import TooManyRequests
+from concurrent.futures import ThreadPoolExecutor
 
 load_dotenv()
 
@@ -36,11 +39,28 @@ def clean_link(link):
     return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
+_translator_executor = ThreadPoolExecutor(max_workers=4)
+
+
+def _translate_once(title):
+    return GoogleTranslator(source="auto", target="ru").translate(title)
+
+
 def translate_title(title):
-    try:
-        return GoogleTranslator(source="auto", target="ru").translate(title)
-    except Exception:
-        return title
+    for attempt in range(3):
+        future = _translator_executor.submit(_translate_once, title)
+        try:
+            result = future.result(timeout=10)
+        except TooManyRequests:
+            time.sleep(2)
+            continue
+        except Exception:
+            return title
+
+        time.sleep(0.3)
+        return result
+
+    return title
 
 
 def load_sent_links():
@@ -99,6 +119,7 @@ def collect_news(sent_links):
     undated_news = []
     failed_sources = []
     seen_links = set()
+    already_sent_count = 0
 
     for name, url in SOURCES.items():
         items = fetch_source(url)
@@ -107,20 +128,24 @@ def collect_news(sent_links):
             continue
 
         for item in items:
+            is_within_week = item["date"] is None or item["date"] >= week_ago
+            if not is_within_week:
+                continue
+
             if item["clean_link"] in sent_links or item["clean_link"] in seen_links:
+                already_sent_count += 1
                 continue
 
             if item["date"] is None:
                 item["title"] = translate_title(item["title"])
                 undated_news.append(item)
-                seen_links.add(item["clean_link"])
-            elif item["date"] >= week_ago:
+            else:
                 item["title"] = translate_title(item["title"])
                 dated_news.append(item)
-                seen_links.add(item["clean_link"])
+            seen_links.add(item["clean_link"])
 
     dated_news.sort(key=lambda n: n["date"], reverse=True)
-    return dated_news, undated_news, failed_sources
+    return dated_news, undated_news, failed_sources, already_sent_count
 
 
 def build_message(dated_news, undated_news):
@@ -166,6 +191,14 @@ def build_message(dated_news, undated_news):
     return text, included_links, skipped_count
 
 
+def empty_digest_message(failed_sources, already_sent_count):
+    if failed_sources:
+        return "Не удалось проверить новости на этой неделе: часть источников не ответила."
+    if already_sent_count:
+        return "Новых новостей нет — всё, что вышло на этой неделе, уже было в прошлых дайджестах."
+    return "На этой неделе новостей не было."
+
+
 def send_message(text):
     send_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     data = {
@@ -178,10 +211,10 @@ def send_message(text):
 
 def main():
     sent_links = load_sent_links()
-    dated_news, undated_news, failed_sources = collect_news(sent_links)
+    dated_news, undated_news, failed_sources, already_sent_count = collect_news(sent_links)
 
     if not dated_news and not undated_news:
-        message_text = "На этой неделе новостей не было."
+        message_text = empty_digest_message(failed_sources, already_sent_count)
         included_links = []
     else:
         message_text, included_links, skipped_count = build_message(dated_news, undated_news)
