@@ -135,6 +135,32 @@ def test_collect_news_skips_already_sent_links(monkeypatch):
     assert already_sent_count == 1
 
 
+class _FakeResponse:
+    def __init__(self, status_code, text=""):
+        self.status_code = status_code
+        self.text = text
+
+
+def test_main_does_not_mark_sent_when_telegram_send_fails(tmp_path, monkeypatch, capsys):
+    day = datetime.now(timezone.utc) - timedelta(days=1)
+    sent_links_file = tmp_path / "sent_links.txt"
+    monkeypatch.setattr(bot, "SENT_LINKS_FILE", str(sent_links_file))
+    monkeypatch.setattr(bot, "translate_title", lambda title: title)
+
+    def fake_fetch_source(url):
+        if "openai" in url:
+            return [_make_item("Новость", "https://a.com/1", day)]
+        return []
+
+    monkeypatch.setattr(bot, "fetch_source", fake_fetch_source)
+    monkeypatch.setattr(bot, "send_message", lambda text: _FakeResponse(500, "Internal Server Error"))
+
+    bot.main()
+
+    assert not sent_links_file.exists()
+    assert "Ошибка" in capsys.readouterr().out
+
+
 def test_collect_news_reports_failed_source(monkeypatch):
     def fake_fetch_source(url):
         if "openai" in url:
